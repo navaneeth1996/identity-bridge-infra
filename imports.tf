@@ -1,20 +1,19 @@
 ###############################################################################
-# Import pre-existing resources created by deploy.py bootstrap steps.
-# These were created before Terraform ran — without import blocks Terraform
-# would try to create them again and fail with 409 Already Exists.
+# Import pre-existing resources into Terraform state.
+# IDs must be hardcoded — variables are not allowed in import blocks.
 ###############################################################################
 
 import {
-  id = "projects/${var.project_id}/serviceAccounts/infra-manager-deployer@${var.project_id}.iam.gserviceaccount.com"
+  id = "projects/gcp-nav-project/serviceAccounts/infra-manager-deployer@gcp-nav-project.iam.gserviceaccount.com"
   to = google_service_account.infra_deployer
 }
 
 import {
-  id = "projects/${var.project_id}/locations/${var.region}/repositories/identity-bridge"
+  id = "projects/gcp-nav-project/locations/us-central1/repositories/identity-bridge"
   to = google_artifact_registry_repository.bridge_repo
 }
 
 import {
-  id = "projects/${var.project_id}/secrets/bridge-signing-key"
+  id = "projects/gcp-nav-project/secrets/bridge-signing-key"
   to = google_secret_manager_secret.signing_key
 }
