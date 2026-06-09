@@ -29,34 +29,36 @@ resource "google_project_service" "apis" {
     "sts.googleapis.com",
     "pubsub.googleapis.com",
     "bigquery.googleapis.com",
-    "bigquerydatatransfer.googleapis.com",
     "cloudbuild.googleapis.com",
     "artifactregistry.googleapis.com",
     "config.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
   ])
   service            = each.key
   disable_on_destroy = false
 }
 
+data "google_project" "current" {}
+
 ###############################################################################
 # 2. Service Accounts
+# NOTE: infra-manager-deployer SA is pre-created by deploy.py bootstrap.
+# We import it so Terraform manages it going forward without trying to create.
 ###############################################################################
 
-# Bridge runtime SA — used by Cloud Run
 resource "google_service_account" "bridge_runtime" {
   account_id   = "identity-bridge-runtime"
   display_name = "Identity Bridge Runtime SA"
   depends_on   = [google_project_service.apis]
 }
 
-# Infra Manager deployer SA — needs permission to create all resources
+# infra_deployer is imported (pre-exists) — see imports.tf
 resource "google_service_account" "infra_deployer" {
   account_id   = "infra-manager-deployer"
   display_name = "Infrastructure Manager Deployer SA"
   depends_on   = [google_project_service.apis]
 }
 
-# Grant deployer SA project-level roles needed by Infra Manager
 resource "google_project_iam_member" "deployer_roles" {
   for_each = toset([
     "roles/run.admin",
@@ -68,6 +70,8 @@ resource "google_project_iam_member" "deployer_roles" {
     "roles/artifactregistry.admin",
     "roles/storage.admin",
     "roles/logging.admin",
+    "roles/config.agent",
+    "roles/config.admin",
   ])
   project    = var.project_id
   role       = each.key
@@ -76,7 +80,8 @@ resource "google_project_iam_member" "deployer_roles" {
 }
 
 ###############################################################################
-# 3. Artifact Registry — container image repository
+# 3. Artifact Registry
+# Pre-created by deploy.py — imported so Terraform manages it.
 ###############################################################################
 resource "google_artifact_registry_repository" "bridge_repo" {
   location      = var.region
@@ -87,7 +92,8 @@ resource "google_artifact_registry_repository" "bridge_repo" {
 }
 
 ###############################################################################
-# 4. Secret Manager — RSA signing key
+# 4. Secret Manager
+# Pre-created by deploy.py — imported so Terraform manages it.
 ###############################################################################
 resource "google_secret_manager_secret" "signing_key" {
   secret_id = "bridge-signing-key"
@@ -97,16 +103,6 @@ resource "google_secret_manager_secret" "signing_key" {
   depends_on = [google_project_service.apis]
 }
 
-# Placeholder version — replaced post-deploy with real key (see deploy.py)
-resource "google_secret_manager_secret_version" "signing_key_placeholder" {
-  secret      = google_secret_manager_secret.signing_key.id
-  secret_data = "PLACEHOLDER_REPLACED_BY_DEPLOY_SCRIPT"
-  lifecycle {
-    ignore_changes = [secret_data]   # deploy.py manages actual key rotation
-  }
-}
-
-# Grant bridge runtime SA access to the secret
 resource "google_secret_manager_secret_iam_member" "bridge_secret_access" {
   secret_id  = google_secret_manager_secret.signing_key.secret_id
   role       = "roles/secretmanager.secretAccessor"
@@ -115,13 +111,12 @@ resource "google_secret_manager_secret_iam_member" "bridge_secret_access" {
 }
 
 ###############################################################################
-# 5. Pub/Sub — audit event stream
+# 5. Pub/Sub
 ###############################################################################
 resource "google_pubsub_topic" "audit" {
   name       = "identity-bridge-audit"
   depends_on = [google_project_service.apis]
-
-  message_retention_duration = "86400s" # 24 hours
+  message_retention_duration = "86400s"
 }
 
 resource "google_pubsub_topic_iam_member" "bridge_pubsub_publish" {
@@ -132,7 +127,7 @@ resource "google_pubsub_topic_iam_member" "bridge_pubsub_publish" {
 }
 
 ###############################################################################
-# 6. BigQuery — audit log table
+# 6. BigQuery
 ###############################################################################
 resource "google_bigquery_dataset" "audit" {
   dataset_id    = "identity_bridge_audit"
@@ -147,15 +142,14 @@ resource "google_bigquery_table" "token_events" {
   deletion_protection = false
 
   schema = jsonencode([
-    { name = "token_id",    type = "STRING",    mode = "REQUIRED" },
-    { name = "issued_at",   type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "subject",     type = "STRING",    mode = "REQUIRED" },
-    { name = "email",       type = "STRING",    mode = "NULLABLE" },
-    { name = "department",  type = "STRING",    mode = "NULLABLE" },
-    { name = "groups",      type = "STRING",    mode = "NULLABLE" },
-    { name = "source_ip",   type = "STRING",    mode = "NULLABLE" },
-    { name = "expiry",      type = "TIMESTAMP", mode = "NULLABLE" },
-    { name = "bridge_version", type = "STRING", mode = "NULLABLE" },
+    { name = "token_id",       type = "STRING",    mode = "REQUIRED" },
+    { name = "issued_at",      type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "subject",        type = "STRING",    mode = "REQUIRED" },
+    { name = "email",          type = "STRING",    mode = "NULLABLE" },
+    { name = "department",     type = "STRING",    mode = "NULLABLE" },
+    { name = "groups",         type = "STRING",    mode = "NULLABLE" },
+    { name = "source_ip",      type = "STRING",    mode = "NULLABLE" },
+    { name = "bridge_version", type = "STRING",    mode = "NULLABLE" },
   ])
 
   time_partitioning {
@@ -166,38 +160,45 @@ resource "google_bigquery_table" "token_events" {
   depends_on = [google_bigquery_dataset.audit]
 }
 
+# Grant Pub/Sub SA access to write to BigQuery
+resource "google_project_iam_member" "pubsub_bq_writer" {
+  project    = var.project_id
+  role       = "roles/bigquery.dataEditor"
+  member     = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "pubsub_bq_metadata" {
+  project    = var.project_id
+  role       = "roles/bigquery.metadataViewer"
+  member     = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  depends_on = [google_project_service.apis]
+}
+
 # Pub/Sub → BigQuery subscription
+# Uses drop_unknown_fields + write_metadata=false to avoid schema mismatch.
+# The Pub/Sub message body is written directly into the "data" column as STRING.
 resource "google_pubsub_subscription" "audit_to_bq" {
   name  = "audit-to-bigquery"
   topic = google_pubsub_topic.audit.name
 
   bigquery_config {
-    table            = "${var.project_id}.${google_bigquery_dataset.audit.dataset_id}.${google_bigquery_table.token_events.table_id}"
-    use_topic_schema = false
-    write_metadata   = false
+    table               = "${var.project_id}.${google_bigquery_dataset.audit.dataset_id}.${google_bigquery_table.token_events.table_id}"
+    use_topic_schema    = false
+    use_table_schema    = false
+    write_metadata      = false
     drop_unknown_fields = true
   }
 
-  depends_on = [google_bigquery_table.token_events]
+  depends_on = [
+    google_bigquery_table.token_events,
+    google_project_iam_member.pubsub_bq_writer,
+    google_project_iam_member.pubsub_bq_metadata,
+  ]
 }
-
-# Grant Pub/Sub SA write access to BigQuery
-resource "google_project_iam_member" "pubsub_bq_writer" {
-  project = var.project_id
-  role    = "roles/bigquery.dataEditor"
-  member  = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
-}
-
-resource "google_project_iam_member" "pubsub_bq_metadata" {
-  project = var.project_id
-  role    = "roles/bigquery.metadataViewer"
-  member  = "serviceAccount:service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
-}
-
-data "google_project" "current" {}
 
 ###############################################################################
-# 7. Workload Identity Federation pool + OIDC provider
+# 7. Workload Identity Federation
 ###############################################################################
 resource "google_iam_workload_identity_pool" "legacy_idp" {
   workload_identity_pool_id = "legacy-idp-pool"
@@ -213,22 +214,20 @@ resource "google_iam_workload_identity_pool_provider" "bridge_oidc" {
 
   oidc {
     issuer_uri = var.bridge_issuer_uri
-    # allowed_audiences defaults to the service URL
   }
 
   attribute_mapping = {
-    "google.subject"      = "assertion.sub"
+    "google.subject"       = "assertion.sub"
     "attribute.department" = "assertion.custom_dept"
-    "attribute.email"     = "assertion.email"
+    "attribute.email"      = "assertion.email"
   }
 
   attribute_condition = "assertion.iss == '${var.bridge_issuer_uri}'"
-
-  depends_on = [google_iam_workload_identity_pool.legacy_idp]
+  depends_on          = [google_iam_workload_identity_pool.legacy_idp]
 }
 
 ###############################################################################
-# 8. Cloud Run — identity bridge service
+# 8. Cloud Run
 ###############################################################################
 resource "google_cloud_run_v2_service" "identity_bridge" {
   name     = "identity-bridge"
@@ -238,12 +237,11 @@ resource "google_cloud_run_v2_service" "identity_bridge" {
     service_account = google_service_account.bridge_runtime.email
 
     scaling {
-      min_instance_count = 1   # avoid cold start in demo
+      min_instance_count = 1
       max_instance_count = 10
     }
 
     containers {
-      # Image built separately by deploy.py before Infra Manager call
       image = "${var.region}-docker.pkg.dev/${var.project_id}/identity-bridge/bridge:${var.image_tag}"
 
       ports {
@@ -277,12 +275,6 @@ resource "google_cloud_run_v2_service" "identity_bridge" {
         period_seconds        = 5
         failure_threshold     = 3
       }
-
-      liveness_probe {
-        http_get { path = "/health" }
-        period_seconds    = 30
-        failure_threshold = 3
-      }
     }
   }
 
@@ -293,23 +285,10 @@ resource "google_cloud_run_v2_service" "identity_bridge" {
   ]
 }
 
-# Allow unauthenticated access (demo only — lock down in prod with IAP)
 resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.identity_bridge.name
   role     = "roles/run.invoker"
   member   = "allUsers"
-}
-
-###############################################################################
-# 9. Cloud Logging — structured log sink for bridge events
-###############################################################################
-resource "google_logging_project_sink" "bridge_sink" {
-  name        = "identity-bridge-log-sink"
-  destination = "bigquery.googleapis.com/projects/${var.project_id}/datasets/${google_bigquery_dataset.audit.dataset_id}"
-  filter      = "resource.type=\"cloud_run_revision\" resource.labels.service_name=\"identity-bridge\""
-
-  unique_writer_identity = true
-  depends_on             = [google_bigquery_dataset.audit]
 }
