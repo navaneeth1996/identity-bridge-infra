@@ -140,6 +140,7 @@ resource "google_bigquery_table" "token_events" {
   dataset_id          = google_bigquery_dataset.audit.dataset_id
   table_id            = "token_events"
   deletion_protection = false
+  lifecycle { prevent_destroy = false }
 
   schema = jsonencode([
     { name = "token_id",       type = "STRING",    mode = "REQUIRED" },
