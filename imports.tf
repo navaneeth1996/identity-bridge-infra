@@ -37,3 +37,13 @@ import {
   id = "projects/gcp-nav-project/locations/global/workloadIdentityPools/legacy-idp-pool"
   to = google_iam_workload_identity_pool.legacy_idp
 }
+
+import {
+  id = "projects/gcp-nav-project/locations/global/workloadIdentityPools/legacy-idp-pool/providers/bridge-oidc-provider"
+  to = google_iam_workload_identity_pool_provider.bridge_oidc
+}
+
+import {
+  id = "projects/gcp-nav-project/datasets/identity_bridge_audit/tables/token_events"
+  to = google_bigquery_table.token_events
+}
