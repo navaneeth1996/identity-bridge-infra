@@ -136,30 +136,6 @@ resource "google_bigquery_dataset" "audit" {
   depends_on    = [google_project_service.apis]
 }
 
-resource "google_bigquery_table" "token_events" {
-  dataset_id          = google_bigquery_dataset.audit.dataset_id
-  table_id            = "token_events"
-  deletion_protection = false
-  lifecycle { prevent_destroy = false }
-
-  schema = jsonencode([
-    { name = "token_id",       type = "STRING",    mode = "REQUIRED" },
-    { name = "issued_at",      type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "subject",        type = "STRING",    mode = "REQUIRED" },
-    { name = "email",          type = "STRING",    mode = "NULLABLE" },
-    { name = "department",     type = "STRING",    mode = "NULLABLE" },
-    { name = "groups",         type = "STRING",    mode = "NULLABLE" },
-    { name = "source_ip",      type = "STRING",    mode = "NULLABLE" },
-    { name = "bridge_version", type = "STRING",    mode = "NULLABLE" },
-  ])
-
-  time_partitioning {
-    type  = "DAY"
-    field = "issued_at"
-  }
-
-  depends_on = [google_bigquery_dataset.audit]
-}
 
 # Grant Pub/Sub SA access to write to BigQuery
 resource "google_project_iam_member" "pubsub_bq_writer" {
