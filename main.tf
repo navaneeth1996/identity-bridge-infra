@@ -175,27 +175,6 @@ resource "google_project_iam_member" "pubsub_bq_metadata" {
   depends_on = [google_project_service.apis]
 }
 
-# Pub/Sub → BigQuery subscription
-# Uses drop_unknown_fields + write_metadata=false to avoid schema mismatch.
-# The Pub/Sub message body is written directly into the "data" column as STRING.
-resource "google_pubsub_subscription" "audit_to_bq" {
-  name  = "audit-to-bigquery"
-  topic = google_pubsub_topic.audit.name
-
-  bigquery_config {
-    table               = "${var.project_id}.${google_bigquery_dataset.audit.dataset_id}.${google_bigquery_table.token_events.table_id}"
-    use_topic_schema    = false
-    use_table_schema    = false
-    write_metadata      = false
-    drop_unknown_fields = true
-  }
-
-  depends_on = [
-    google_bigquery_table.token_events,
-    google_project_iam_member.pubsub_bq_writer,
-    google_project_iam_member.pubsub_bq_metadata,
-  ]
-}
 
 ###############################################################################
 # 7. Workload Identity Federation
