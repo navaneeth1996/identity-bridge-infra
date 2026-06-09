@@ -47,3 +47,8 @@ import {
   id = "projects/gcp-nav-project/datasets/identity_bridge_audit/tables/token_events"
   to = google_bigquery_table.token_events
 }
+
+import {
+  id = "projects/gcp-nav-project/locations/us-central1/services/identity-bridge"
+  to = google_cloud_run_v2_service.identity_bridge
+}
