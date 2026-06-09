@@ -29,7 +29,7 @@ output "audit_topic" {
 
 output "bq_table" {
   description = "Full BigQuery table reference"
-  value       = "${var.project_id}.${google_bigquery_dataset.audit.dataset_id}.${google_bigquery_table.token_events.table_id}"
+  value       = "${var.project_id}.${google_bigquery_dataset.audit.dataset_id}.token_events"
 }
 
 output "bridge_runtime_sa" {
